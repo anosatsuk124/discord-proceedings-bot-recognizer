@@ -1,6 +1,6 @@
 use once_cell::sync::OnceCell;
 use std::{env, path::PathBuf, sync::Mutex};
-use whisper_rs::{convert_integer_to_float_audio, FullParams, SamplingStrategy, WhisperContext};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
 
 const MODEL_PATH_ENV: &str = "MODEL_PATH";
 
