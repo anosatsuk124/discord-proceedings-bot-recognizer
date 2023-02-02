@@ -1,7 +1,4 @@
-use std::{
-    io::{BufWriter, Write},
-    path::PathBuf,
-};
+use std::{io::BufWriter, path::PathBuf};
 mod audio;
 mod parse_json;
 mod serialize_to_csv;
