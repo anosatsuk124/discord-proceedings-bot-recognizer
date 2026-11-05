@@ -1,49 +1,111 @@
-use std::{io::BufWriter, path::PathBuf};
+//! discord-proceedings-bot の録音を文字起こしして、議事録 CSV を書く。
+//!
+//! 推論は faster-whisper と同じ CTranslate2 で行い、前処理とデコードの手順も faster-whisper に合わせている。
+
 mod audio;
-mod parse_json;
-mod serialize_to_csv;
-mod whisper;
+mod config;
+mod features;
+mod manifest;
+mod model;
+mod proceedings;
+mod tokenizer;
+mod transcribe;
+mod watch;
 
-use crate::whisper::{whisper, whisper_init};
-use clap::Parser;
-use csv::WriterBuilder;
+use std::path::PathBuf;
+use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// Path to the discord bot output directory
-    #[arg(short, long)]
-    path: PathBuf,
-    /// Path to the output csv file
-    #[arg(short, long)]
-    output: PathBuf,
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+
+use crate::config::{WhisperSettings, output_timezone};
+use crate::proceedings::{OUTPUT_FILE, transcribe_session, write_csv};
+use crate::transcribe::Transcriber;
+
+/// モデルや言語などの設定は環境変数(WHISPER_*, PROCEEDINGS_TIMEZONE)で指定する。README を参照。
+#[derive(Parser)]
+#[command(version, about)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
 }
 
-fn main() {
-    let args = Args::parse();
+#[derive(Subcommand)]
+enum Command {
+    /// 録音が終わったセッションを 1 つ文字起こしして、議事録 CSV を書く
+    Transcribe {
+        /// セッションのディレクトリ(manifest.json があるところ)
+        session_dir: PathBuf,
+        /// 出力先。省略するとセッションのディレクトリに proceedings.csv を書く
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// DATA_DIR/sessions を見張り、録音が終わったセッションを順に文字起こしする
+    Watch {
+        /// bot と共有するデータディレクトリ
+        data_dir: PathBuf,
+        /// 新しいセッションを探す間隔(秒)
+        #[arg(long, default_value_t = 30)]
+        interval: u64,
+    },
+    /// Ogg Opus の音声ファイルを 1 つ文字起こしして、標準出力に書く(動作確認用)
+    File { audio: PathBuf },
+}
 
-    let talks = crate::parse_json::TalkList::read(&args.path.join("talks.json"));
-
-    let csv_file = BufWriter::new(std::fs::File::create(&args.output).unwrap());
-
-    let mut csv_file = WriterBuilder::new().from_writer(csv_file);
-
-    for talk in talks.0.into_iter() {
-        let audio =
-            crate::audio::wav_to_integer_mono(&args.path.join(format!("{}.wav", talk.uuid)));
-        let params = whisper_init();
-        for line in whisper(params, &audio).iter() {
-            println!(
-                "speaker: {:?}, date: {:?}: {}",
-                talk.discord_name, talk.date, line
-            );
-            let csv = crate::serialize_to_csv::Csv::new(
-                talk.discord_name.to_string(),
-                talk.date.to_string(),
-                line.to_string(),
-            );
-            csv_file.serialize(csv).unwrap();
+fn main() -> ExitCode {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    match run(Cli::parse()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            log::error!("{error:#}");
+            ExitCode::FAILURE
         }
     }
-    csv_file.flush().unwrap();
+}
+
+fn run(cli: Cli) -> Result<()> {
+    let settings = WhisperSettings::from_env()?;
+    let timezone = output_timezone()?;
+    match cli.command {
+        Command::Transcribe {
+            session_dir,
+            output,
+        } => {
+            let transcriber = Transcriber::load(&settings)?;
+            let rows = transcribe_session(&session_dir, &transcriber)?;
+            let output = output.unwrap_or_else(|| session_dir.join(OUTPUT_FILE));
+            write_csv(&rows, &output, &timezone)?;
+            log::info!("wrote {} line(s) to {}", rows.len(), output.display());
+        }
+        Command::Watch { data_dir, interval } => {
+            let transcriber = Transcriber::load(&settings)?;
+            watch::run(
+                &data_dir,
+                &transcriber,
+                &timezone,
+                Duration::from_secs(interval),
+            );
+        }
+        Command::File { audio } => {
+            let transcriber = Transcriber::load(&settings)?;
+            let started = Instant::now();
+            let samples = audio::decode_ogg_opus_file(&audio)?;
+            let decoded = started.elapsed();
+            let segments = transcriber.transcribe(&samples)?;
+            for segment in &segments {
+                println!(
+                    "[{:.2}s -> {:.2}s] {}",
+                    segment.start, segment.end, segment.text
+                );
+            }
+            log::info!(
+                "{:.1}s of audio: decoded in {:.2}s, transcribed in {:.2}s",
+                samples.len() as f32 / audio::SAMPLE_RATE as f32,
+                decoded.as_secs_f32(),
+                (started.elapsed() - decoded).as_secs_f32(),
+            );
+        }
+    }
+    Ok(())
 }
