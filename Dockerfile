@@ -17,21 +17,22 @@ RUN mkdir src && echo 'fn main() {}' > src/main.rs \
 
 COPY src ./src
 RUN cargo build --release --locked \
-    && strip target/release/discord-proceedings-bot-recognizer
+    && strip target/release/discord-proceedings-bot-recognizer \
+    # 実行用イメージに無い OpenMP のランタイム(CTranslate2 と oneDNN が使う)と、
+    # uid 1000 が書けるモデルとデータの置き場所を用意しておく
+    && mkdir -p /out/lib /out/models /out/data \
+    && cp -L "$(gcc -print-file-name=libgomp.so.1)" /out/lib/
 
-FROM debian:trixie-slim
-# libgomp1: CTranslate2 と oneDNN が使う OpenMP
-# ca-certificates: Hugging Face からモデルを取ってくるときの TLS
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends libgomp1 ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && useradd --uid 1000 --user-group --no-create-home --home-dir /nonexistent app \
-    && mkdir -p /models /data \
-    && chown app:app /models /data
+# 実行用はシェルやパッケージマネージャーを含まない distroless(glibc / libstdc++ / CA 証明書のみ)にする。
+FROM gcr.io/distroless/cc-debian13
+COPY --from=build /out/lib/libgomp.so.1 /usr/lib/x86_64-linux-gnu/libgomp.so.1
 COPY --from=build /src/target/release/discord-proceedings-bot-recognizer /usr/local/bin/proceedings-recognizer
-USER app
+COPY --from=build --chown=1000:1000 /out/models /models
+COPY --from=build --chown=1000:1000 /out/data /data
+# bot と同じ uid 1000 で動かす(共有するデータディレクトリをどちらも書けるように)
+USER 1000:1000
 # モデルのキャッシュ(Hugging Face の形式)
 ENV HF_HOME=/models
 VOLUME ["/models", "/data"]
-ENTRYPOINT ["proceedings-recognizer"]
+ENTRYPOINT ["/usr/local/bin/proceedings-recognizer"]
 CMD ["watch", "/data"]
