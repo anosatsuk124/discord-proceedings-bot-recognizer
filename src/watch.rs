@@ -7,12 +7,12 @@ use anyhow::{Context, Result};
 use jiff::tz::TimeZone;
 
 use crate::manifest::MANIFEST_FILE;
-use crate::proceedings::{OUTPUT_FILE, SpeechToText, transcribe_session, write_csv};
+use crate::proceedings::{CSV_FILE, SpeechToText, transcribe_session, write_proceedings};
 
 /// 文字起こしに失敗したセッションに置く。消すと次の巡回でやり直す。
 pub const ERROR_FILE: &str = "transcription.error";
 
-/// manifest.json があり、議事録もエラーの記録もまだ無いセッションを、古い順に返す。
+/// manifest.json があり、議事録(CSV)もエラーの記録もまだ無いセッションを、古い順に返す。
 pub fn pending_sessions(data_dir: &Path) -> Result<Vec<PathBuf>> {
     let sessions_root = data_dir.join("sessions");
     if !sessions_root.exists() {
@@ -22,7 +22,7 @@ pub fn pending_sessions(data_dir: &Path) -> Result<Vec<PathBuf>> {
     for guild in read_dirs(&sessions_root)? {
         for session in read_dirs(&guild)? {
             if session.join(MANIFEST_FILE).is_file()
-                && !session.join(OUTPUT_FILE).exists()
+                && !session.join(CSV_FILE).exists()
                 && !session.join(ERROR_FILE).exists()
             {
                 pending.push(session);
@@ -49,14 +49,14 @@ fn read_dirs(dir: &Path) -> Result<Vec<PathBuf>> {
 pub fn process_session(session: &Path, stt: &dyn SpeechToText, timezone: &TimeZone) -> bool {
     log::info!("transcribing {}", session.display());
     let started = std::time::Instant::now();
-    let result = transcribe_session(session, stt).and_then(|rows| {
-        write_csv(&rows, &session.join(OUTPUT_FILE), timezone).map(|()| rows.len())
+    let result = transcribe_session(session, stt).and_then(|proceedings| {
+        write_proceedings(&proceedings, session, timezone).map(|()| proceedings.rows.len())
     });
     match result {
         Ok(count) => {
             log::info!(
-                "wrote {count} line(s) to {} in {:.1}s",
-                session.join(OUTPUT_FILE).display(),
+                "wrote {count} line(s) of proceedings to {} in {:.1}s",
+                session.display(),
                 started.elapsed().as_secs_f32()
             );
             true
@@ -115,7 +115,7 @@ mod tests {
         for dir in [&done, &failed, &later, &earlier] {
             std::fs::write(dir.join(MANIFEST_FILE), "{}").unwrap();
         }
-        std::fs::write(done.join(OUTPUT_FILE), "").unwrap();
+        std::fs::write(done.join(CSV_FILE), "").unwrap();
         std::fs::write(failed.join(ERROR_FILE), "").unwrap();
         std::fs::write(recording.join("x.ogg"), "").unwrap();
 
@@ -144,7 +144,7 @@ mod tests {
         assert!(process_session(&good, &stt, &TimeZone::UTC));
         assert!(!process_session(&bad, &stt, &TimeZone::UTC));
 
-        let csv = std::fs::read_to_string(good.join(OUTPUT_FILE)).unwrap();
+        let csv = std::fs::read_to_string(good.join(CSV_FILE)).unwrap();
         assert_eq!(
             csv,
             "speaker,date,talk\n山田,2026-11-05T00:00:10+00:00,こんにちは\n"

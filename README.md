@@ -1,7 +1,13 @@
 # discord-proceedings-bot-recognizer
 
 [discord-proceedings-bot](https://github.com/anosatsuk124/discord-proceedings-bot) が録音した発言を文字起こしして、
-議事録の CSV(`speaker,date,talk`)を書きます。
+議事録を書きます。同じ内容を次の 3 つの形で書きます。
+
+| ファイル | 内容 |
+| --- | --- |
+| `proceedings.csv` | 表計算ソフト向けの CSV(`speaker,date,talk`) |
+| `proceedings.html` | ブラウザで開く 1 ファイルで完結したページ。外部のファイルやスクリプトは読み込まない |
+| `proceedings.md` | Markdown。メモアプリや GitHub にそのまま貼れる |
 
 推論には [faster-whisper](https://github.com/SYSTRAN/faster-whisper) と同じ
 [CTranslate2](https://github.com/OpenNMT/CTranslate2) を、Rust のバインディング [ct2rs](https://crates.io/crates/ct2rs)
@@ -14,7 +20,7 @@ faster-whisper とほぼ同じ結果と速さになります。
 ## 使い方
 
 ```sh
-# 録音が終わったセッションを 1 つ文字起こしする(<session_dir>/proceedings.csv を書く)
+# 録音が終わったセッションを 1 つ文字起こしする(<session_dir> に proceedings.csv・.html・.md を書く)
 proceedings-recognizer transcribe <DATA_DIR>/sessions/<guild_id>/<session_id>
 
 # DATA_DIR を見張り、録音が終わったセッション(manifest.json があり proceedings.csv が無いもの)を順に処理する
@@ -24,8 +30,12 @@ proceedings-recognizer watch <DATA_DIR> --interval 30
 proceedings-recognizer file sample.ogg
 ```
 
-議事録の CSV は UTF-8 で、時刻順に並べます。表計算ソフトで開いたときに数式として実行されないよう、
-`=` `+` `-` `@` などで始まるセル(表示名や発言)には先頭に `'` を付けます。
+議事録はどれも UTF-8 で、時刻順に並べます。表計算ソフトで開いたときに数式として実行されないよう、
+CSV では `=` `+` `-` `@` などで始まるセル(表示名や発言)の先頭に `'` を付けます。HTML と Markdown では、
+表示名や発言がタグや書式として解釈されないようにエスケープします。
+
+watch は `proceedings.csv` の有無で処理済みかを判断します。bot は `proceedings.csv` ができたら
+3 つを投稿するので、HTML と Markdown を先に、CSV を最後に書きます。
 
 文字起こしに失敗したセッションには `transcription.error` を書き、watch はそのセッションを飛ばします。
 原因を直したら `transcription.error` を消すと、次の巡回でやり直します。
@@ -43,7 +53,7 @@ proceedings-recognizer file sample.ogg
 | `WHISPER_BEAM_SIZE` | `5` | ビームサーチの幅 |
 | `WHISPER_CHUNK_LENGTH` | `15` | 1 回にデコードする長さ(秒)。`none` ならモデルの設定(30 秒)。15 は kotoba-whisper の推奨 |
 | `WHISPER_CONDITION_ON_PREVIOUS_TEXT` | `false` | 前の区間の文字起こしをプロンプトに使うか。kotoba-whisper の推奨は `false` |
-| `PROCEEDINGS_TIMEZONE` | `UTC` | CSV に書く時刻のタイムゾーン(例: `Asia/Tokyo`) |
+| `PROCEEDINGS_TIMEZONE` | `UTC` | 議事録に書く時刻のタイムゾーン(例: `Asia/Tokyo`) |
 | `HF_HOME` | `~/.cache/huggingface` | モデルのキャッシュの場所 |
 | `HF_TOKEN` | | 非公開のモデルを使うときのトークン |
 | `RUST_LOG` | `info` | ログの詳しさ(`debug` にするとデコードの様子も出る) |

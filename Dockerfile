@@ -9,14 +9,15 @@ RUN apt-get update \
 WORKDIR /src
 
 # 依存(特に CTranslate2 と oneDNN)のビルドは重いので、ソースより先にビルドしてレイヤーに残す。
+# デプロイ先でほかのサービスと同居しながらビルドするので、優先度を最低にしておく。
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo 'fn main() {}' > src/main.rs \
-    && cargo build --release --locked \
+    && nice -n 19 cargo build --release --locked \
     && rm -rf src target/release/deps/discord_proceedings_bot_recognizer-* \
         target/release/discord-proceedings-bot-recognizer*
 
 COPY src ./src
-RUN cargo build --release --locked \
+RUN nice -n 19 cargo build --release --locked \
     && strip target/release/discord-proceedings-bot-recognizer \
     # 実行用イメージに無い OpenMP のランタイム(CTranslate2 と oneDNN が使う)と、
     # uid 1000 が書けるモデルとデータの置き場所を用意しておく

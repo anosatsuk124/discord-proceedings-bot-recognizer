@@ -28,6 +28,10 @@ pub struct SessionManifest {
     pub session_id: String,
     pub guild_id: String,
     pub channel_id: String,
+    /// 録音時点のサーバー名。古い bot の manifest には無い。
+    pub guild_name: Option<String>,
+    /// 録音したボイスチャンネルの名前。古い bot の manifest には無い。
+    pub channel_name: Option<String>,
     pub started_at: Timestamp,
     pub ended_at: Timestamp,
     pub utterances: Vec<Utterance>,
@@ -112,6 +116,21 @@ mod tests {
             utterance.started_at,
             "2026-11-05T08:10:00Z".parse::<Timestamp>().unwrap()
         );
+    }
+
+    #[test]
+    fn reads_the_names_when_the_bot_writes_them() {
+        let manifest = SessionManifest::parse(&manifest_with_file("u1.ogg")).unwrap();
+        assert_eq!(manifest.guild_name, None);
+        assert_eq!(manifest.channel_name, None);
+
+        let text = manifest_with_file("u1.ogg").replace(
+            "\"channel_id\": \"2\",",
+            "\"channel_id\": \"2\", \"guild_name\": \"開発部\", \"channel_name\": \"定例\",",
+        );
+        let manifest = SessionManifest::parse(&text).unwrap();
+        assert_eq!(manifest.guild_name.as_deref(), Some("開発部"));
+        assert_eq!(manifest.channel_name.as_deref(), Some("定例"));
     }
 
     #[test]

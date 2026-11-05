@@ -1,7 +1,9 @@
-//! セッション 1 つ分の録音から議事録 CSV を作る。
+//! セッション 1 つ分の録音から議事録を作る。
+//!
+//! 議事録は同じ内容を 3 つの形で書く。CSV(表計算ソフト向け)、HTML(1 ファイルで完結する
+//! ページ)、Markdown。HTML と Markdown の中身は [`crate::report`] で組み立てる。
 
-use std::fs::File;
-use std::io::BufWriter;
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -9,9 +11,13 @@ use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 
 use crate::manifest::SessionManifest;
+use crate::report;
 use crate::transcribe::{Segment, Transcriber};
 
-pub const OUTPUT_FILE: &str = "proceedings.csv";
+/// 議事録の CSV。watch はこれの有無で処理済みかを判断するので、3 つのうち最後に書く。
+pub const CSV_FILE: &str = "proceedings.csv";
+pub const HTML_FILE: &str = "proceedings.html";
+pub const MARKDOWN_FILE: &str = "proceedings.md";
 
 /// 音声ファイルを文字起こしするもの。テストでは偽物に差し替える。
 pub trait SpeechToText {
@@ -32,10 +38,22 @@ pub struct Row {
     pub talk: String,
 }
 
-/// セッションの発言をすべて文字起こしして、時刻順の行にする。
+/// セッション 1 つ分の議事録。
+#[derive(Clone, Debug, PartialEq)]
+pub struct Proceedings {
+    pub session_id: String,
+    pub guild_name: Option<String>,
+    pub channel_name: Option<String>,
+    pub started_at: Timestamp,
+    pub ended_at: Timestamp,
+    /// 時刻順の発言。
+    pub rows: Vec<Row>,
+}
+
+/// セッションの発言をすべて文字起こしして、時刻順の議事録にする。
 ///
 /// 読めない音声ファイルがあってもセッション全体は止めず、その発言だけを飛ばす。
-pub fn transcribe_session(session_dir: &Path, stt: &dyn SpeechToText) -> Result<Vec<Row>> {
+pub fn transcribe_session(session_dir: &Path, stt: &dyn SpeechToText) -> Result<Proceedings> {
     let manifest = SessionManifest::load(session_dir)?;
     let mut rows = Vec::new();
     let mut skipped = 0;
@@ -67,19 +85,56 @@ pub fn transcribe_session(session_dir: &Path, stt: &dyn SpeechToText) -> Result<
         );
     }
     rows.sort_by_key(|row| row.date);
-    Ok(rows)
+    Ok(Proceedings {
+        session_id: manifest.session_id,
+        guild_name: manifest.guild_name,
+        channel_name: manifest.channel_name,
+        started_at: manifest.started_at,
+        ended_at: manifest.ended_at,
+        rows,
+    })
 }
 
-/// 議事録を CSV で書く。watch は出力ファイルの有無で処理済みかを判断するので、
-/// 一時ファイルに書いてから置き換える。
-pub fn write_csv(rows: &[Row], output: &Path, timezone: &TimeZone) -> Result<()> {
+/// 議事録を CSV・HTML・Markdown で output_dir に書く。
+///
+/// watch は CSV の有無で処理済みかを判断し、bot は CSV ができたら 3 つを投稿するので、
+/// HTML と Markdown を先に、CSV を最後に書く。どれも一時ファイルに書いてから置き換える。
+pub fn write_proceedings(
+    proceedings: &Proceedings,
+    output_dir: &Path,
+    timezone: &TimeZone,
+) -> Result<()> {
+    write_atomically(
+        &output_dir.join(HTML_FILE),
+        report::render_html(proceedings, timezone).as_bytes(),
+    )?;
+    write_atomically(
+        &output_dir.join(MARKDOWN_FILE),
+        report::render_markdown(proceedings, timezone).as_bytes(),
+    )?;
+    write_atomically(
+        &output_dir.join(CSV_FILE),
+        &render_csv(&proceedings.rows, timezone)?,
+    )
+}
+
+fn write_atomically(output: &Path, contents: &[u8]) -> Result<()> {
     let mut temporary = output.as_os_str().to_owned();
     temporary.push(".tmp");
     let temporary = Path::new(&temporary);
 
-    let file = File::create(temporary)
+    let mut file = std::fs::File::create(temporary)
         .with_context(|| format!("cannot create {}", temporary.display()))?;
-    let mut writer = csv::Writer::from_writer(BufWriter::new(file));
+    file.write_all(contents)?;
+    file.sync_all()?;
+    std::fs::rename(temporary, output)
+        .with_context(|| format!("cannot write {}", output.display()))?;
+    Ok(())
+}
+
+/// 議事録の CSV。列は以前の recognizer と同じ speaker, date, talk。
+fn render_csv(rows: &[Row], timezone: &TimeZone) -> Result<Vec<u8>> {
+    let mut writer = csv::Writer::from_writer(Vec::new());
     writer.write_record(["speaker", "date", "talk"])?;
     for row in rows {
         let date = row
@@ -95,13 +150,7 @@ pub fn write_csv(rows: &[Row], output: &Path, timezone: &TimeZone) -> Result<()>
     }
     writer
         .into_inner()
-        .map_err(|error| error.into_error())?
-        .into_inner()
-        .map_err(|error| error.into_error())?
-        .sync_all()?;
-    std::fs::rename(temporary, output)
-        .with_context(|| format!("cannot write {}", output.display()))?;
-    Ok(())
+        .map_err(|error| error.into_error().into())
 }
 
 /// 表計算ソフトで開いたときに数式として実行されないよう(CSV インジェクション対策)、
@@ -175,8 +224,9 @@ pub(crate) mod tests {
             ("c.ogg".to_owned(), Err("broken".to_owned())),
         ]));
 
-        let rows = transcribe_session(dir.path(), &stt).unwrap();
-        let summary: Vec<(&str, String, &str)> = rows
+        let proceedings = transcribe_session(dir.path(), &stt).unwrap();
+        let summary: Vec<(&str, String, &str)> = proceedings
+            .rows
             .iter()
             .map(|r| (r.speaker.as_str(), r.date.to_string(), r.talk.as_str()))
             .collect();
@@ -192,36 +242,49 @@ pub(crate) mod tests {
 
     #[test]
     fn csv_uses_the_configured_time_zone() {
-        let dir = tempfile::tempdir().unwrap();
-        let output = dir.path().join(OUTPUT_FILE);
         let rows = vec![Row {
             speaker: "山田".to_owned(),
             date: "2026-11-05T00:00:10.7Z".parse().unwrap(),
             talk: "カンマ, と \"引用符\" を含む".to_owned(),
         }];
-        write_csv(&rows, &output, &TimeZone::get("Asia/Tokyo").unwrap()).unwrap();
-
+        let csv = render_csv(&rows, &TimeZone::get("Asia/Tokyo").unwrap()).unwrap();
         assert_eq!(
-            std::fs::read_to_string(&output).unwrap(),
+            String::from_utf8(csv).unwrap(),
             "speaker,date,talk\n山田,2026-11-05T09:00:10+09:00,\"カンマ, と \"\"引用符\"\" を含む\"\n"
         );
-        assert!(!dir.path().join("proceedings.csv.tmp").exists());
     }
 
     #[test]
     fn csv_cells_cannot_become_formulas() {
-        let dir = tempfile::tempdir().unwrap();
-        let output = dir.path().join(OUTPUT_FILE);
         let rows = vec![Row {
             speaker: "=HYPERLINK(\"https://example.com\")".to_owned(),
             date: "2026-11-05T00:00:00Z".parse().unwrap(),
             talk: "-1 は負の数".to_owned(),
         }];
-        write_csv(&rows, &output, &TimeZone::UTC).unwrap();
-
-        let mut reader = csv::Reader::from_path(&output).unwrap();
+        let csv = render_csv(&rows, &TimeZone::UTC).unwrap();
+        let mut reader = csv::Reader::from_reader(csv.as_slice());
         let record = reader.records().next().unwrap().unwrap();
         assert_eq!(&record[0], "'=HYPERLINK(\"https://example.com\")");
         assert_eq!(&record[2], "'-1 は負の数");
+    }
+
+    #[test]
+    fn writes_csv_html_and_markdown() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(dir.path());
+        let stt = FakeStt(HashMap::from([
+            ("a.ogg".to_owned(), Ok(vec![segment(0.0, "始めます。")])),
+            ("b.ogg".to_owned(), Ok(vec![])),
+            ("c.ogg".to_owned(), Ok(vec![])),
+        ]));
+        let proceedings = transcribe_session(dir.path(), &stt).unwrap();
+        assert_eq!(proceedings.session_id, "s");
+        write_proceedings(&proceedings, dir.path(), &TimeZone::UTC).unwrap();
+
+        for file in [CSV_FILE, HTML_FILE, MARKDOWN_FILE] {
+            let text = std::fs::read_to_string(dir.path().join(file)).unwrap();
+            assert!(text.contains("始めます。"), "{file}: {text}");
+            assert!(!dir.path().join(format!("{file}.tmp")).exists());
+        }
     }
 }

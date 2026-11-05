@@ -1,4 +1,4 @@
-//! discord-proceedings-bot の録音を文字起こしして、議事録 CSV を書く。
+//! discord-proceedings-bot の録音を文字起こしして、議事録(CSV・HTML・Markdown)を書く。
 //!
 //! 推論は faster-whisper と同じ CTranslate2 で行い、前処理とデコードの手順も faster-whisper に合わせている。
 
@@ -8,6 +8,7 @@ mod features;
 mod manifest;
 mod model;
 mod proceedings;
+mod report;
 mod tokenizer;
 mod transcribe;
 mod watch;
@@ -20,7 +21,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use crate::config::{WhisperSettings, output_timezone};
-use crate::proceedings::{OUTPUT_FILE, transcribe_session, write_csv};
+use crate::proceedings::{transcribe_session, write_proceedings};
 use crate::transcribe::Transcriber;
 
 /// モデルや言語などの設定は環境変数(WHISPER_*, PROCEEDINGS_TIMEZONE)で指定する。README を参照。
@@ -33,13 +34,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// 録音が終わったセッションを 1 つ文字起こしして、議事録 CSV を書く
+    /// 録音が終わったセッションを 1 つ文字起こしして、議事録を書く
     Transcribe {
         /// セッションのディレクトリ(manifest.json があるところ)
         session_dir: PathBuf,
-        /// 出力先。省略するとセッションのディレクトリに proceedings.csv を書く
+        /// proceedings.csv・.html・.md を書くディレクトリ。省略するとセッションのディレクトリ
         #[arg(short, long)]
-        output: Option<PathBuf>,
+        output_dir: Option<PathBuf>,
     },
     /// DATA_DIR/sessions を見張り、録音が終わったセッションを順に文字起こしする
     Watch {
@@ -70,13 +71,17 @@ fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Transcribe {
             session_dir,
-            output,
+            output_dir,
         } => {
             let transcriber = Transcriber::load(&settings)?;
-            let rows = transcribe_session(&session_dir, &transcriber)?;
-            let output = output.unwrap_or_else(|| session_dir.join(OUTPUT_FILE));
-            write_csv(&rows, &output, &timezone)?;
-            log::info!("wrote {} line(s) to {}", rows.len(), output.display());
+            let proceedings = transcribe_session(&session_dir, &transcriber)?;
+            let output_dir = output_dir.unwrap_or_else(|| session_dir.clone());
+            write_proceedings(&proceedings, &output_dir, &timezone)?;
+            log::info!(
+                "wrote {} line(s) of proceedings to {}",
+                proceedings.rows.len(),
+                output_dir.display()
+            );
         }
         Command::Watch { data_dir, interval } => {
             let transcriber = Transcriber::load(&settings)?;
