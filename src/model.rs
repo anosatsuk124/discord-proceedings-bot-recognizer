@@ -10,16 +10,21 @@ use anyhow::{Context, Result, bail};
 use hf_hub::api::sync::ApiBuilder;
 use hf_hub::{Cache, Repo, RepoType};
 
-/// faster-whisper の `download_model` と同じく、推論に要るファイルだけを取ってくる。
+/// faster-whisper の `download_model` と同じく、推論に要るファイルだけを、この順に取ってくる。
+///
+/// [`LAST_FILE`] を必ず最後に取るので、キャッシュに [`LAST_FILE`] があれば、それより前の
+/// ファイル(リポジトリにあれば preprocessor_config.json も)は取り終えている。
+/// 途中で止まったダウンロードを、ファイルの欠けたモデルとして使ってしまわないための順番。
 const MODEL_FILES: &[&str] = &[
-    "config.json",
-    "model.bin",
     "preprocessor_config.json",
-    "tokenizer.json",
     "vocabulary.json",
     "vocabulary.txt",
+    "config.json",
+    "model.bin",
+    LAST_FILE,
 ];
-const REQUIRED_FILES: &[&str] = &["config.json", "model.bin", "tokenizer.json"];
+const LAST_FILE: &str = "tokenizer.json";
+const REQUIRED_FILES: &[&str] = &["config.json", "model.bin", LAST_FILE];
 
 pub fn resolve(model: &str, revision: Option<&str>) -> Result<PathBuf> {
     let path = Path::new(model);
@@ -56,10 +61,7 @@ fn cached(cache: &Cache, repo: &Repo) -> Option<PathBuf> {
             .to_path_buf()
     };
     // snapshots のファイルは blobs へのシンボリックリンクなので、リンク先まで確かめる(is_file はたどる)。
-    let complete = REQUIRED_FILES
-        .iter()
-        .chain(&["preprocessor_config.json"])
-        .all(|file| dir.join(file).is_file())
+    let complete = REQUIRED_FILES.iter().all(|file| dir.join(file).is_file())
         && ["vocabulary.json", "vocabulary.txt"]
             .iter()
             .any(|file| dir.join(file).is_file());
@@ -81,12 +83,16 @@ fn download(repo: Repo) -> Result<PathBuf> {
     let info = api.info()?;
 
     let mut dir = None;
-    for sibling in &info.siblings {
-        if !MODEL_FILES.contains(&sibling.rfilename.as_str()) {
+    for &file in MODEL_FILES {
+        if !info
+            .siblings
+            .iter()
+            .any(|sibling| sibling.rfilename == file)
+        {
             continue;
         }
-        let path = api.get(&sibling.rfilename)?;
-        log::info!("downloaded {}", sibling.rfilename);
+        let path = api.get(file)?;
+        log::info!("fetched {file}");
         dir.get_or_insert_with(|| path.parent().map(Path::to_path_buf));
     }
     let dir = dir.flatten().context("the repository has no model files")?;
@@ -155,11 +161,35 @@ mod tests {
 
     #[test]
     fn incomplete_snapshots_are_not_used() {
+        for missing in ["vocabulary.json", LAST_FILE] {
+            let root = tempfile::tempdir().unwrap();
+            let files: Vec<&str> = FILES.iter().copied().filter(|f| *f != missing).collect();
+            snapshot(root.path(), &files);
+            let cache = Cache::new(root.path().to_path_buf());
+            assert_eq!(cached(&cache, &repo(COMMIT)), None, "without {missing}");
+        }
+    }
+
+    #[test]
+    fn models_without_a_preprocessor_config_are_cached_too() {
+        // Systran/faster-whisper-tiny などは preprocessor_config.json を持たない。
         let root = tempfile::tempdir().unwrap();
-        snapshot(root.path(), &FILES[..4]); // vocabulary が無い
+        let files: Vec<&str> = FILES
+            .iter()
+            .copied()
+            .filter(|f| *f != "preprocessor_config.json")
+            .collect();
+        let dir = snapshot(root.path(), &files);
         let cache = Cache::new(root.path().to_path_buf());
-        assert_eq!(cached(&cache, &repo(COMMIT)), None);
-        assert_eq!(cached(&cache, &repo("main")), None);
+        assert_eq!(cached(&cache, &repo(COMMIT)), Some(dir));
+    }
+
+    #[test]
+    fn the_tokenizer_is_fetched_last() {
+        assert_eq!(MODEL_FILES.last(), Some(&LAST_FILE));
+        for file in REQUIRED_FILES.iter().chain(&["preprocessor_config.json"]) {
+            assert!(MODEL_FILES.contains(file), "{file}");
+        }
     }
 
     #[test]
