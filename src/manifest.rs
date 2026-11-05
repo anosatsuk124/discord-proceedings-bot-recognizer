@@ -19,10 +19,10 @@ use serde::Deserialize;
 pub const MANIFEST_FILE: &str = "manifest.json";
 pub const SUPPORTED_VERSION: u32 = 1;
 
-// bot との約束を丸ごと検証する(deny_unknown_fields)ため、今は読まないフィールドも持っておく。
+// bot との約束にある必須のフィールドがそろっているかを検証するため、今は読まないフィールドも持っておく。
+// 知らないフィールド(text_channel_id など bot だけが使うもの)は無視する。
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct SessionManifest {
     pub version: u32,
     pub session_id: String,
@@ -35,7 +35,6 @@ pub struct SessionManifest {
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Utterance {
     pub id: String,
     pub user_id: String,
@@ -131,6 +130,16 @@ mod tests {
                 "{file:?}"
             );
         }
+    }
+
+    #[test]
+    fn ignores_fields_it_does_not_use() {
+        let text = manifest_with_file("u1.ogg").replace(
+            "\"channel_id\": \"2\",",
+            "\"channel_id\": \"2\", \"text_channel_id\": \"9\", \"future\": [1, 2],",
+        );
+        assert!(text.contains("text_channel_id"));
+        assert!(SessionManifest::parse(&text).is_ok());
     }
 
     #[test]
