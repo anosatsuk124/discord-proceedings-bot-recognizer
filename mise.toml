@@ -1,0 +1,14 @@
+[tools]
+rust = { version = "1.99.1", components = "clippy,rustfmt" }
+# CTranslate2 / oneDNN / libopus のビルドに使う
+cmake = "4.4"
+
+# CTranslate2 と oneDNN を debug と release で二重にビルドしないよう、どれも release でそろえる。
+[tasks.build]
+run = "cargo build --release --locked"
+
+[tasks.test]
+run = "cargo test --release --locked"
+
+[tasks.lint]
+run = ["cargo fmt --check", "cargo clippy --release --locked --all-targets -- -D warnings"]

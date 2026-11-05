@@ -1,16 +1,35 @@
 [package]
 name = "discord-proceedings-bot-recognizer"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.99"
+license = "Apache-2.0"
+description = "discord-proceedings-bot の録音を CTranslate2 (faster-whisper と同じエンジン) で文字起こしして議事録 CSV にする"
+publish = false
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+# GPU で動かすときに有効にする。CUDA Toolkit が要る。
+cuda = ["ct2rs/cuda", "ct2rs/cudnn", "ct2rs/cuda-dynamic-loading"]
 
 [dependencies]
-time = { version = "0.3.17", features = ["formatting", "serde", "parsing"] }
-clap = { version = "4.1.4", features = ["derive"] }
-csv = "1.1.6"
-hound = "3.5.0"
-once_cell = "1.17.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-whisper-rs = { git = "https://github.com/tazz4843/whisper-rs.git", rev = "6156a046286101c91b866a9d04b7f845a6cef3f7"}
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+csv = "1"
+# CPU の行列演算は oneDNN (dnnl)。faster-whisper の PyPI 版 CTranslate2 も AMD の CPU では
+# oneDNN を使う(MKL は Intel の CPU でしか選ばれない)ので、同じ計算経路になる。
+ct2rs = { version = "0.10.3", default-features = false, features = ["dnnl", "openmp-runtime-comp"] }
+env_logger = "0.11"
+flate2 = "1"
+hf-hub = { version = "0.4.3", default-features = false, features = ["ureq", "rustls-tls"] }
+jiff = { version = "0.2", features = ["serde", "tzdb-bundle-always"] }
+log = "0.4"
+ogg = "0.9"
+opus = "0.4"
+realfft = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 正規表現は純 Rust の fancy-regex を使う(onig だと C のライブラリのビルドが増える)
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+
+[dev-dependencies]
+tempfile = "3"
