@@ -87,7 +87,11 @@ pub fn write_csv(rows: &[Row], output: &Path, timezone: &TimeZone) -> Result<()>
             .to_zoned(timezone.clone())
             .strftime("%Y-%m-%dT%H:%M:%S%:z")
             .to_string();
-        writer.write_record([row.speaker.as_str(), &date, &row.talk])?;
+        writer.write_record([
+            neutralize_formula(&row.speaker).as_ref(),
+            &date,
+            neutralize_formula(&row.talk).as_ref(),
+        ])?;
     }
     writer
         .into_inner()
@@ -98,6 +102,17 @@ pub fn write_csv(rows: &[Row], output: &Path, timezone: &TimeZone) -> Result<()>
     std::fs::rename(temporary, output)
         .with_context(|| format!("cannot write {}", output.display()))?;
     Ok(())
+}
+
+/// 表計算ソフトで開いたときに数式として実行されないよう(CSV インジェクション対策)、
+/// `=` `+` `-` `@` タブ・改行で始まるセルの先頭に `'` を付ける。
+/// 表示名は Discord の参加者が自由に決められるので、`=HYPERLINK(...)` のような名前もありうる。
+fn neutralize_formula(cell: &str) -> std::borrow::Cow<'_, str> {
+    if cell.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{cell}").into()
+    } else {
+        cell.into()
+    }
 }
 
 #[cfg(test)]
@@ -191,5 +206,22 @@ pub(crate) mod tests {
             "speaker,date,talk\n山田,2026-11-05T09:00:10+09:00,\"カンマ, と \"\"引用符\"\" を含む\"\n"
         );
         assert!(!dir.path().join("proceedings.csv.tmp").exists());
+    }
+
+    #[test]
+    fn csv_cells_cannot_become_formulas() {
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join(OUTPUT_FILE);
+        let rows = vec![Row {
+            speaker: "=HYPERLINK(\"https://example.com\")".to_owned(),
+            date: "2026-11-05T00:00:00Z".parse().unwrap(),
+            talk: "-1 は負の数".to_owned(),
+        }];
+        write_csv(&rows, &output, &TimeZone::UTC).unwrap();
+
+        let mut reader = csv::Reader::from_path(&output).unwrap();
+        let record = reader.records().next().unwrap().unwrap();
+        assert_eq!(&record[0], "'=HYPERLINK(\"https://example.com\")");
+        assert_eq!(&record[2], "'-1 は負の数");
     }
 }

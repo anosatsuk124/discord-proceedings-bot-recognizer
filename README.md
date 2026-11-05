@@ -24,6 +24,9 @@ proceedings-recognizer watch <DATA_DIR> --interval 30
 proceedings-recognizer file sample.ogg
 ```
 
+議事録の CSV は UTF-8 で、時刻順に並べます。表計算ソフトで開いたときに数式として実行されないよう、
+`=` `+` `-` `@` などで始まるセル(表示名や発言)には先頭に `'` を付けます。
+
 文字起こしに失敗したセッションには `transcription.error` を書き、watch はそのセッションを飛ばします。
 原因を直したら `transcription.error` を消すと、次の巡回でやり直します。
 
