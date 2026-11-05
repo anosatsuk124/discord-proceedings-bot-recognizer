@@ -222,6 +222,9 @@ fn mel_filters(sampling_rate: usize, n_fft: usize, n_mels: usize) -> Vec<f32> {
         for (bin, &fft_freq) in fft_freqs.iter().enumerate() {
             let lower = (fft_freq - freqs[mel]) / (freqs[mel + 1] - freqs[mel]);
             let upper = (freqs[mel + 2] - fft_freq) / (freqs[mel + 2] - freqs[mel + 1]);
+            // max(0, min(lower, upper))。upper は負になりうるので clamp(0, upper) には置き換えられない
+            // (下限が上限より大きいと clamp は panic する)。
+            // skipcq: RS-W1069
             weights[mel * n_bins + bin] = (lower.min(upper).max(0.0) * enorm) as f32;
         }
     }

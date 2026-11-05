@@ -254,7 +254,7 @@ impl Transcriber {
         let features = StorageView::new(
             &[1, mel.n_mels, ENCODER_FRAMES],
             &mut window,
-            Default::default(),
+            ct2rs::Device::default(),
         )?;
         self.whisper.encode(&features, false)
     }

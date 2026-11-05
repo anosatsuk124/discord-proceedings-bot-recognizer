@@ -6,7 +6,6 @@
 use std::fmt::{self, Write as _};
 
 use jiff::Zoned;
-use jiff::civil::Date;
 use jiff::tz::TimeZone;
 
 use crate::proceedings::{Proceedings, Row};
@@ -16,14 +15,14 @@ const SPEAKER_COLORS: usize = 8;
 
 /// 議事録を Markdown にする。
 pub fn render_markdown(proceedings: &Proceedings, timezone: &TimeZone) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(1024 + proceedings.rows.len() * 128);
     write_markdown(&mut out, proceedings, timezone).expect("writing to a String cannot fail");
     out
 }
 
 /// 議事録を、1 ファイルで完結する HTML にする。
 pub fn render_html(proceedings: &Proceedings, timezone: &TimeZone) -> String {
-    let mut out = String::new();
+    let mut out = String::with_capacity(STYLE.len() + 2048 + proceedings.rows.len() * 256);
     write_html(&mut out, proceedings, timezone).expect("writing to a String cannot fail");
     out
 }
@@ -80,20 +79,39 @@ fn write_html(out: &mut String, p: &Proceedings, timezone: &TimeZone) -> fmt::Re
     let title = title(p, &started);
     let speakers = speakers(&p.rows);
 
-    write!(
+    writeln!(
         out,
         "<!doctype html>\n<html lang=\"ja\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          <meta name=\"color-scheme\" content=\"light dark\">\n\
-         <title>{}</title>\n<style>{STYLE}</style>\n</head>\n<body>\n<div class=\"page\">\n",
+         <title>{}</title>\n<style>{STYLE}</style>\n</head>\n<body>\n<div class=\"page\">",
         html_text(&title)
     )?;
+    write_html_header(out, p, timezone, &title, &speakers)?;
+    writeln!(out, "<main>")?;
+    write_html_lines(out, p, timezone, &speakers)?;
+    writeln!(out, "</main>")?;
+    writeln!(
+        out,
+        "<footer>Discord の録音から自動で文字起こしした議事録です。聞き取りの誤りを含むことがあります。<br>セッション {}</footer>",
+        html_text(&p.session_id)
+    )?;
+    writeln!(out, "</div>\n</body>\n</html>")
+}
 
+/// 見出し、日時などの情報、参加者の一覧。
+fn write_html_header(
+    out: &mut String,
+    p: &Proceedings,
+    timezone: &TimeZone,
+    title: &str,
+    speakers: &[(&str, usize)],
+) -> fmt::Result {
     writeln!(out, "<header>")?;
     writeln!(out, "<p class=\"eyebrow\">議事録</p>")?;
     match &p.channel_name {
         Some(channel) => writeln!(out, "<h1>#{}</h1>", html_text(channel))?,
-        None => writeln!(out, "<h1>{}</h1>", html_text(&title))?,
+        None => writeln!(out, "<h1>{}</h1>", html_text(title))?,
     }
     writeln!(out, "<dl class=\"meta\">")?;
     if let Some(guild) = &p.guild_name {
@@ -119,39 +137,42 @@ fn write_html(out: &mut String, p: &Proceedings, timezone: &TimeZone) -> fmt::Re
         }
         writeln!(out, "</ul>")?;
     }
-    writeln!(out, "</header>")?;
+    writeln!(out, "</header>")
+}
 
-    writeln!(out, "<main>")?;
+/// 発言の行。同じ人が続けて話した行は 1 つのまとまり(section)にし、日付をまたいだら区切りを入れる。
+fn write_html_lines(
+    out: &mut String,
+    p: &Proceedings,
+    timezone: &TimeZone,
+    speakers: &[(&str, usize)],
+) -> fmt::Result {
     if p.rows.is_empty() {
-        writeln!(out, "<p class=\"empty\">発言はありませんでした。</p>")?;
+        return writeln!(out, "<p class=\"empty\">発言はありませんでした。</p>");
     }
-    // 同じ人が続けて話した行は 1 つのまとまりにする。日付をまたいだら区切りを入れる。
-    let mut previous: Option<(&str, Date)> = None;
+    let mut current_date = p.started_at.to_zoned(timezone.clone()).date();
+    let mut current_speaker: Option<&str> = None;
     for (index, row) in p.rows.iter().enumerate() {
         let at = row.date.to_zoned(timezone.clone());
-        let date = at.date();
-        let new_date = match previous {
-            Some((_, previous_date)) => previous_date != date,
-            None => date != started.date(),
-        };
-        let new_turn = new_date || previous.is_none_or(|(speaker, _)| speaker != row.speaker);
-        if new_turn && previous.is_some() {
-            writeln!(out, "</section>")?;
-        }
-        if new_date {
+        let new_date = at.date() != current_date;
+        if new_date || current_speaker != Some(row.speaker.as_str()) {
+            if current_speaker.is_some() {
+                writeln!(out, "</section>")?;
+            }
+            if new_date {
+                current_date = at.date();
+                writeln!(
+                    out,
+                    "<h2 class=\"date\"><time datetime=\"{current_date}\">{current_date}</time></h2>"
+                )?;
+            }
             writeln!(
                 out,
-                "<h2 class=\"date\"><time datetime=\"{date}\">{date}</time></h2>"
+                "<section class=\"turn s{}\">\n<p class=\"who\">{}</p>",
+                speaker_color(speakers, &row.speaker),
+                html_text(&row.speaker)
             )?;
-        }
-        if new_turn {
-            let color = speakers
-                .iter()
-                .position(|(name, _)| *name == row.speaker)
-                .unwrap_or(0)
-                % SPEAKER_COLORS;
-            writeln!(out, "<section class=\"turn s{color}\">")?;
-            writeln!(out, "<p class=\"who\">{}</p>", html_text(&row.speaker))?;
+            current_speaker = Some(&row.speaker);
         }
         let id = index + 1;
         writeln!(
@@ -161,19 +182,17 @@ fn write_html(out: &mut String, p: &Proceedings, timezone: &TimeZone) -> fmt::Re
             at.strftime("%H:%M:%S"),
             html_text(&row.talk)
         )?;
-        previous = Some((&row.speaker, date));
     }
-    if previous.is_some() {
-        writeln!(out, "</section>")?;
-    }
-    writeln!(out, "</main>")?;
+    writeln!(out, "</section>")
+}
 
-    writeln!(
-        out,
-        "<footer>Discord の録音から自動で文字起こしした議事録です。聞き取りの誤りを含むことがあります。<br>セッション {}</footer>",
-        html_text(&p.session_id)
-    )?;
-    writeln!(out, "</div>\n</body>\n</html>")
+/// 発言者の色の番号(CSS の .s0〜.s7)。初めて話した順に割り当てる。
+fn speaker_color(speakers: &[(&str, usize)], name: &str) -> usize {
+    speakers
+        .iter()
+        .position(|(speaker, _)| *speaker == name)
+        .unwrap_or(0)
+        % SPEAKER_COLORS
 }
 
 /// 例: `議事録 #定例 2026-11-05 23:49`。チャンネル名が無ければ `議事録 2026-11-05 23:49`。
