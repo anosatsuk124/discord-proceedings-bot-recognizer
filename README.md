@@ -20,7 +20,7 @@ proceedings-recognizer transcribe <DATA_DIR>/sessions/<guild_id>/<session_id>
 # DATA_DIR を見張り、録音が終わったセッション(manifest.json があり proceedings.csv が無いもの)を順に処理する
 proceedings-recognizer watch <DATA_DIR> --interval 30
 
-# Ogg Opus の音声ファイルを 1 つ文字起こしして標準出力に書く(動作確認用)
+# 音声ファイル(Ogg Opus か 16kHz・16bit の WAV)を 1 つ文字起こしして標準出力に書く(動作確認用)
 proceedings-recognizer file sample.ogg
 ```
 

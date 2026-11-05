@@ -1,7 +1,8 @@
-//! bot が保存した Ogg Opus を、Whisper に渡す 16kHz モノラルの f32 に変換する。
+//! 音声ファイルを、Whisper に渡す 16kHz モノラルの f32 に変換する。
 //!
-//! libopus はデコード時に出力のサンプリング周波数とチャンネル数を指定できるので、
-//! 48kHz ステレオの Opus を直接 16kHz モノラルで取り出す(別途のリサンプリングは要らない)。
+//! bot が保存するのは Ogg Opus。libopus はデコード時に出力のサンプリング周波数とチャンネル数を
+//! 指定できるので、48kHz ステレオの Opus を直接 16kHz モノラルで取り出す(別途のリサンプリングは要らない)。
+//! 動作確認用に、16kHz の 16bit PCM の WAV も読める。
 
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
@@ -16,10 +17,71 @@ const OPUS_RATE: u32 = 48_000;
 /// Opus の 1 パケットは最大 120ms。
 const MAX_FRAME_SAMPLES: usize = (SAMPLE_RATE as usize) * 120 / 1000;
 
-pub fn decode_ogg_opus_file(path: &Path) -> Result<Vec<f32>> {
+/// 拡張子が .wav なら WAV、それ以外は Ogg Opus として読む。
+pub fn decode_file(path: &Path) -> Result<Vec<f32>> {
     let file = File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
-    decode_ogg_opus(BufReader::new(file))
-        .with_context(|| format!("cannot decode {}", path.display()))
+    let reader = BufReader::new(file);
+    let is_wav = path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"));
+    if is_wav {
+        decode_wav(reader)
+    } else {
+        decode_ogg_opus(reader)
+    }
+    .with_context(|| format!("cannot decode {}", path.display()))
+}
+
+/// 16kHz・16bit PCM の WAV を読む。ステレオなら左右の平均を取る。
+pub fn decode_wav<R: Read>(mut reader: R) -> Result<Vec<f32>> {
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    ensure!(
+        bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WAVE",
+        "not a RIFF/WAVE file"
+    );
+    let mut channels = None;
+    let mut offset = 12;
+    while offset + 8 <= bytes.len() {
+        let id = &bytes[offset..offset + 4];
+        let size = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into()?) as usize;
+        let body = &bytes[offset + 8..(offset + 8 + size).min(bytes.len())];
+        match id {
+            b"fmt " => {
+                ensure!(body.len() >= 16, "the fmt chunk is too short");
+                let format = u16::from_le_bytes([body[0], body[1]]);
+                let count = u16::from_le_bytes([body[2], body[3]]);
+                let rate = u32::from_le_bytes(body[4..8].try_into()?);
+                let bits = u16::from_le_bytes([body[14], body[15]]);
+                ensure!(
+                    format == 1 && bits == 16 && rate == SAMPLE_RATE && (1..=2).contains(&count),
+                    "only 16-bit PCM WAV at {SAMPLE_RATE}Hz with 1 or 2 channels is supported \
+                     (format={format}, bits={bits}, rate={rate}, channels={count})"
+                );
+                channels = Some(usize::from(count));
+            }
+            b"data" => {
+                let channels = channels.context("the data chunk comes before the fmt chunk")?;
+                let samples = body
+                    .chunks_exact(2 * channels)
+                    .map(|frame| {
+                        frame
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|&s| f32::from(i16::from_le_bytes(s)) / 32768.0)
+                            .sum::<f32>()
+                            / channels as f32
+                    })
+                    .collect();
+                return Ok(samples);
+            }
+            _ => {}
+        }
+        // チャンクは偶数バイトにそろえて並ぶ。
+        offset += 8 + size + (size & 1);
+    }
+    bail!("the WAV file has no data chunk")
 }
 
 pub fn decode_ogg_opus<R: Read + Seek>(reader: R) -> Result<Vec<f32>> {
@@ -111,6 +173,39 @@ mod tests {
         assert!((860..=900).contains(&crossings), "{crossings} crossings");
         let peak = middle.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(peak > 0.05 && peak <= 1.0, "peak {peak}");
+    }
+
+    fn wav(rate: u32, channels: u16, samples: &[i16]) -> Vec<u8> {
+        let data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let mut out = Vec::new();
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"WAVEfmt ");
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        out.extend_from_slice(&channels.to_le_bytes());
+        out.extend_from_slice(&rate.to_le_bytes());
+        out.extend_from_slice(&(rate * 2 * u32::from(channels)).to_le_bytes());
+        out.extend_from_slice(&(2 * channels).to_le_bytes());
+        out.extend_from_slice(&16u16.to_le_bytes());
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&data);
+        out
+    }
+
+    #[test]
+    fn reads_16khz_pcm_wav() {
+        let mono = decode_wav(Cursor::new(wav(16000, 1, &[0, 16384, -32768]))).unwrap();
+        assert_eq!(mono, vec![0.0, 0.5, -1.0]);
+        let stereo = decode_wav(Cursor::new(wav(16000, 2, &[16384, 0, -16384, -16384]))).unwrap();
+        assert_eq!(stereo, vec![0.25, -0.5]);
+    }
+
+    #[test]
+    fn rejects_other_wav_formats() {
+        assert!(decode_wav(Cursor::new(wav(44100, 1, &[0, 1]))).is_err());
+        assert!(decode_wav(Cursor::new(b"RIFF\0\0\0\0WAVE".to_vec())).is_err());
     }
 
     #[test]

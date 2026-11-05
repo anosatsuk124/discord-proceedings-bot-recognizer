@@ -149,7 +149,7 @@ impl Transcriber {
     }
 
     pub fn transcribe_file(&self, path: &Path) -> Result<Vec<Segment>> {
-        let samples = audio::decode_ogg_opus_file(path)?;
+        let samples = audio::decode_file(path)?;
         self.transcribe(&samples)
             .with_context(|| format!("cannot transcribe {}", path.display()))
     }

@@ -49,7 +49,7 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         interval: u64,
     },
-    /// Ogg Opus の音声ファイルを 1 つ文字起こしして、標準出力に書く(動作確認用)
+    /// 音声ファイル(Ogg Opus か 16kHz・16bit の WAV)を 1 つ文字起こしして、標準出力に書く(動作確認用)
     File { audio: PathBuf },
 }
 
@@ -90,7 +90,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::File { audio } => {
             let transcriber = Transcriber::load(&settings)?;
             let started = Instant::now();
-            let samples = audio::decode_ogg_opus_file(&audio)?;
+            let samples = audio::decode_file(&audio)?;
             let decoded = started.elapsed();
             let segments = transcriber.transcribe(&samples)?;
             for segment in &segments {
