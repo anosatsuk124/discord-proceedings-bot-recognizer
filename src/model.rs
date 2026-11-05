@@ -24,8 +24,12 @@ const MODEL_FILES: &[&str] = &[
     LAST_FILE,
 ];
 const LAST_FILE: &str = "tokenizer.json";
+/// 非公開のモデルを取ってくるときの Hugging Face のトークンを指定する環境変数。
+const TOKEN_VARIABLE: &str = "HF_TOKEN";
 const REQUIRED_FILES: &[&str] = &["config.json", "model.bin", LAST_FILE];
 
+/// モデルのディレクトリを返す。`model` がディレクトリならそのまま使い、そうでなければ
+/// Hugging Face のリポジトリ ID とみなして、キャッシュに無いファイルを取ってくる。
 pub fn resolve(model: &str, revision: Option<&str>) -> Result<PathBuf> {
     let path = Path::new(model);
     if path.is_dir() {
@@ -74,7 +78,7 @@ fn is_commit_hash(revision: &str) -> bool {
 
 fn download(repo: Repo) -> Result<PathBuf> {
     log::info!("downloading {} (revision {})", repo.url(), repo.revision());
-    let token = std::env::var("HF_TOKEN").ok().filter(|t| !t.is_empty());
+    let token = std::env::var(TOKEN_VARIABLE).ok().filter(|t| !t.is_empty());
     let mut builder = ApiBuilder::from_env().with_progress(false);
     if token.is_some() {
         builder = builder.with_token(token);

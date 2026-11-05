@@ -14,10 +14,15 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PreprocessorConfig {
+    /// Mel フィルターの数(特徴量の次元)。
     pub feature_size: usize,
+    /// 音声のサンプリングレート(Hz)。
     pub sampling_rate: usize,
+    /// STFT のフレームの間隔(サンプル数)。
     pub hop_length: usize,
+    /// 1 回にデコードする音声の長さ(秒)。
     pub chunk_length: usize,
+    /// FFT の窓の長さ(サンプル数)。
     pub n_fft: usize,
 }
 
@@ -50,8 +55,11 @@ impl PreprocessorConfig {
 /// `[n_mels][frames]` の行優先で並べた特徴量。
 #[derive(Clone, Debug)]
 pub struct Mel {
+    /// Mel フィルターの数(行数)。
     pub n_mels: usize,
+    /// フレームの数(列数)。
     pub frames: usize,
+    /// `n_mels * frames` 個の値。
     pub data: Vec<f32>,
 }
 
@@ -69,6 +77,7 @@ impl Mel {
     }
 }
 
+/// 音声から Whisper の log-Mel 特徴量を計算する(faster-whisper の `FeatureExtractor` の移植)。
 pub struct FeatureExtractor {
     n_fft: usize,
     hop_length: usize,
@@ -82,6 +91,7 @@ pub struct FeatureExtractor {
 }
 
 impl FeatureExtractor {
+    /// モデルの前処理の設定から、Mel フィルターと窓関数を用意する。
     pub fn new(config: &PreprocessorConfig) -> Self {
         let n_fft = config.n_fft;
         let n_bins = n_fft / 2 + 1;

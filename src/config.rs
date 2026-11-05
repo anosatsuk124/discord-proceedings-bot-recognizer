@@ -4,6 +4,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use ct2rs::{ComputeType, Device};
 use jiff::tz::TimeZone;
 
+/// `WHISPER_MODEL` を指定しないときに使うモデル。
 pub const DEFAULT_MODEL: &str = "kotoba-tech/kotoba-whisper-v2.0-faster";
 
 /// モデルと文字起こしの設定。
@@ -17,25 +18,33 @@ pub struct WhisperSettings {
     pub model: String,
     /// Hugging Face のリビジョン(コミット SHA など)。固定するとモデルの差し替えを防げる。
     pub revision: Option<String>,
+    /// 推論に使うデバイス。
     pub device: DeviceKind,
+    /// CTranslate2 の計算の型(`int8`, `float32` など)。読み込むときに検証済み。
     pub compute_type: String,
     /// 0 なら CTranslate2 の既定(4 スレッド)。
     pub cpu_threads: usize,
     /// 文字起こしする言語。多言語モデルでは必須(自動判定には対応していない)。
     pub language: String,
+    /// ビームサーチの幅。
     pub beam_size: usize,
     /// 1 回にデコードする音声の長さ(秒)。None ならモデルの preprocessor_config.json に従う。
     pub chunk_length: Option<usize>,
+    /// 前の区間の文字起こしを、次の区間のプロンプトに使うか。
     pub condition_on_previous_text: bool,
 }
 
+/// 推論に使うデバイス。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceKind {
+    /// CPU。
     Cpu,
+    /// NVIDIA の GPU(`cuda` フィーチャーを付けてビルドしたときだけ使える)。
     Cuda,
 }
 
 impl DeviceKind {
+    /// CTranslate2 のデバイスに変換する。
     pub fn to_ct2(self) -> Device {
         match self {
             Self::Cpu => Device::CPU,
@@ -45,10 +54,12 @@ impl DeviceKind {
 }
 
 impl WhisperSettings {
+    /// 環境変数(`WHISPER_*`)から読む。
     pub fn from_env() -> Result<Self> {
         Self::from_lookup(|name| std::env::var(name).ok())
     }
 
+    /// 名前から値を引く関数を使って読む。テストでは環境変数の代わりに使う。
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self> {
         let get = |name: &str| {
             lookup(name)
@@ -98,16 +109,21 @@ impl WhisperSettings {
         })
     }
 
+    /// CTranslate2 の計算の型。
     pub fn ct2_compute_type(&self) -> ComputeType {
         parse_compute_type(&self.compute_type).expect("validated in from_lookup")
     }
 }
 
+/// 議事録の時刻のタイムゾーンを指定する環境変数。
+const TIMEZONE_VARIABLE: &str = "PROCEEDINGS_TIMEZONE";
+
 /// 議事録の時刻を書くタイムゾーン(PROCEEDINGS_TIMEZONE、既定は UTC)。
 pub fn output_timezone() -> Result<TimeZone> {
-    output_timezone_from(std::env::var("PROCEEDINGS_TIMEZONE").ok().as_deref())
+    output_timezone_from(std::env::var(TIMEZONE_VARIABLE).ok().as_deref())
 }
 
+/// タイムゾーン名を解釈する。空か未指定なら UTC。
 pub fn output_timezone_from(name: Option<&str>) -> Result<TimeZone> {
     match name.map(str::trim).filter(|name| !name.is_empty()) {
         None => Ok(TimeZone::UTC),

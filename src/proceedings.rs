@@ -16,7 +16,9 @@ use crate::transcribe::{Segment, Transcriber};
 
 /// 議事録の CSV。watch はこれの有無で処理済みかを判断するので、3 つのうち最後に書く。
 pub const CSV_FILE: &str = "proceedings.csv";
+/// 議事録の HTML(1 ファイルで完結するページ)。
 pub const HTML_FILE: &str = "proceedings.html";
+/// 議事録の Markdown。
 pub const MARKDOWN_FILE: &str = "proceedings.md";
 
 /// 音声ファイルを文字起こしするもの。テストでは偽物に差し替える。
@@ -33,18 +35,26 @@ impl SpeechToText for Transcriber {
 /// 議事録の 1 行。列は以前の recognizer と同じ speaker, date, talk。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
+    /// 発言者の表示名。
     pub speaker: String,
+    /// 発言の時刻。
     pub date: Timestamp,
+    /// 発言の内容。
     pub talk: String,
 }
 
 /// セッション 1 つ分の議事録。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Proceedings {
+    /// セッション ID。
     pub session_id: String,
+    /// サーバー名。古い manifest には無い。
     pub guild_name: Option<String>,
+    /// ボイスチャンネル名。古い manifest には無い。
     pub channel_name: Option<String>,
+    /// 録音を始めた時刻。
     pub started_at: Timestamp,
+    /// 録音を終えた時刻。
     pub ended_at: Timestamp,
     /// 時刻順の発言。
     pub rows: Vec<Row>,

@@ -73,6 +73,7 @@ pub fn process_session(session: &Path, stt: &dyn SpeechToText, timezone: &TimeZo
     }
 }
 
+/// `data_dir/sessions` を `interval` ごとに見て、録音が終わったセッションを順に文字起こしし続ける。
 pub fn run(data_dir: &Path, stt: &dyn SpeechToText, timezone: &TimeZone, interval: Duration) -> ! {
     log::info!(
         "watching {} every {}s",

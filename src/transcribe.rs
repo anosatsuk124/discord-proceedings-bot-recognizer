@@ -34,29 +34,45 @@ const MAX_LENGTH: usize = 448;
 /// 文字起こしの結果の 1 区間。時刻は音声の先頭からの秒数。
 #[derive(Clone, Debug, PartialEq)]
 pub struct Segment {
+    /// 始まり(秒)。
     pub start: f32,
+    /// 終わり(秒)。
     pub end: f32,
+    /// 文字起こしした文。
     pub text: String,
 }
 
 /// faster-whisper の `TranscriptionOptions` のうち使うもの。既定値は faster-whisper と同じ。
 #[derive(Clone, Debug)]
 pub struct DecodeOptions {
+    /// 言語コード(`ja` など)。
     pub language: String,
+    /// 温度 0 でデコードするときのビームサーチの幅。
     pub beam_size: usize,
+    /// 温度が 0 より大きいときにサンプリングする候補の数。
     pub best_of: usize,
+    /// ビームサーチの patience。
     pub patience: f32,
+    /// 長さのペナルティ。
     pub length_penalty: f32,
+    /// デコードに失敗したときに順に試す温度。
     pub temperatures: Vec<f32>,
+    /// 圧縮率がこれより高い(繰り返しが多い)結果は失敗とみなし、次の温度でデコードし直す。
     pub compression_ratio_threshold: Option<f32>,
+    /// 平均対数尤度がこれより低い結果は失敗とみなし、次の温度でデコードし直す。
     pub log_prob_threshold: Option<f32>,
+    /// 無音の確率がこれより高く、平均対数尤度も低い区間は、無音として飛ばす。
     pub no_speech_threshold: Option<f32>,
+    /// 前の区間の文字起こしを、次の区間のプロンプトに使うか。
     pub condition_on_previous_text: bool,
+    /// この温度以上でデコードし直した区間の後は、プロンプトを空にする。
     pub prompt_reset_on_temperature: f32,
+    /// 最初のタイムスタンプとして許す最大の秒数。
     pub max_initial_timestamp: f32,
 }
 
 impl DecodeOptions {
+    /// 設定から作る。設定に無い値は faster-whisper の既定値にする。
     pub fn from_settings(settings: &WhisperSettings) -> Self {
         Self {
             language: settings.language.clone(),
@@ -75,6 +91,7 @@ impl DecodeOptions {
     }
 }
 
+/// モデルを読み込んで、音声を文字起こしするもの。
 pub struct Transcriber {
     whisper: Whisper,
     tokenizer: WhisperTokenizer,
@@ -89,6 +106,7 @@ pub struct Transcriber {
 }
 
 impl Transcriber {
+    /// モデルを読み込む。キャッシュに無ければ Hugging Face から取ってくる。
     pub fn load(settings: &WhisperSettings) -> Result<Self> {
         let started = Instant::now();
         let model_dir = model::resolve(&settings.model, settings.revision.as_deref())?;
@@ -148,6 +166,7 @@ impl Transcriber {
         })
     }
 
+    /// 音声ファイルを読んで文字起こしする。
     pub fn transcribe_file(&self, path: &Path) -> Result<Vec<Segment>> {
         let samples = audio::decode_file(path)?;
         self.transcribe(&samples)

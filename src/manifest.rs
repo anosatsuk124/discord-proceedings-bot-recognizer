@@ -16,40 +16,57 @@ use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 use serde::Deserialize;
 
+/// bot が録音を終えたときに最後に書く manifest のファイル名。
 pub const MANIFEST_FILE: &str = "manifest.json";
+/// 読める manifest の版。
 pub const SUPPORTED_VERSION: u32 = 1;
 
+/// bot が書く manifest.json。1 回の録音セッションを表す。
 // bot との約束にある必須のフィールドがそろっているかを検証するため、今は読まないフィールドも持っておく。
 // 知らないフィールド(text_channel_id など bot だけが使うもの)は無視する。
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct SessionManifest {
+    /// manifest の版。[`SUPPORTED_VERSION`] だけを受け付ける。
     pub version: u32,
+    /// セッション ID(例: `20261105T080102Z-1a2b3c4d`)。
     pub session_id: String,
+    /// サーバーの ID。
     pub guild_id: String,
+    /// 録音したボイスチャンネルの ID。
     pub channel_id: String,
     /// 録音時点のサーバー名。古い bot の manifest には無い。
     pub guild_name: Option<String>,
     /// 録音したボイスチャンネルの名前。古い bot の manifest には無い。
     pub channel_name: Option<String>,
+    /// 録音を始めた時刻。
     pub started_at: Timestamp,
+    /// 録音を終えた時刻。
     pub ended_at: Timestamp,
+    /// 発言。
     pub utterances: Vec<Utterance>,
 }
 
+/// 発言 1 つ(無音で区切られたひと続きの音声)。
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct Utterance {
+    /// 発言の ID。
     pub id: String,
+    /// 話した人の Discord のユーザー ID。
     pub user_id: String,
+    /// 録音時点のサーバー内の表示名。
     pub speaker: String,
+    /// 話し始めた時刻。
     pub started_at: Timestamp,
+    /// 話し終えた時刻。
     pub ended_at: Timestamp,
     /// セッションディレクトリ直下のファイル名。
     pub file: String,
 }
 
 impl SessionManifest {
+    /// セッションのディレクトリから manifest.json を読む。
     pub fn load(session_dir: &Path) -> Result<Self> {
         let path = session_dir.join(MANIFEST_FILE);
         let text = std::fs::read_to_string(&path)
@@ -57,6 +74,7 @@ impl SessionManifest {
         Self::parse(&text).with_context(|| format!("invalid {}", path.display()))
     }
 
+    /// manifest.json の中身を読み、版とファイル名を検証する。
     pub fn parse(text: &str) -> Result<Self> {
         let manifest: Self = serde_json::from_str(text)?;
         if manifest.version != SUPPORTED_VERSION {

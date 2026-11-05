@@ -14,12 +14,14 @@ use crate::proceedings::{Proceedings, Row};
 /// 発言者を色分けする色の数。HTML の CSS(.s0〜.s7)と合わせる。
 const SPEAKER_COLORS: usize = 8;
 
+/// 議事録を Markdown にする。
 pub fn render_markdown(proceedings: &Proceedings, timezone: &TimeZone) -> String {
     let mut out = String::new();
     write_markdown(&mut out, proceedings, timezone).expect("writing to a String cannot fail");
     out
 }
 
+/// 議事録を、1 ファイルで完結する HTML にする。
 pub fn render_html(proceedings: &Proceedings, timezone: &TimeZone) -> String {
     let mut out = String::new();
     write_html(&mut out, proceedings, timezone).expect("writing to a String cannot fail");

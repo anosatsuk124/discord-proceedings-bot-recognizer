@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail, ensure};
 use ogg::PacketReader;
 use opus::{Channels, Decoder};
 
+/// Whisper が受け取る音声のサンプリングレート(Hz)。デコードした音声はすべてこれにそろえる。
 pub const SAMPLE_RATE: u32 = 16_000;
 const OPUS_RATE: u32 = 48_000;
 /// Opus の 1 パケットは最大 120ms。
@@ -84,6 +85,7 @@ pub fn decode_wav<R: Read>(mut reader: R) -> Result<Vec<f32>> {
     bail!("the WAV file has no data chunk")
 }
 
+/// Ogg Opus を、libopus で 16kHz モノラルの f32 サンプルに直接デコードする。
 pub fn decode_ogg_opus<R: Read + Seek>(reader: R) -> Result<Vec<f32>> {
     let mut packets = PacketReader::new(reader);
 

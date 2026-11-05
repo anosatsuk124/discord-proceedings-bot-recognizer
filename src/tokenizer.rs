@@ -7,19 +7,29 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 
+/// Whisper のトークナイザーと、デコードに使う特殊トークンの ID。
 pub struct WhisperTokenizer {
     inner: tokenizers::Tokenizer,
+    /// `<|startoftranscript|>`
     pub sot: u32,
+    /// `<|endoftext|>`
     pub eot: u32,
+    /// `<|startofprev|>`。前の区間の文字起こしをプロンプトとして渡すときの先頭。
     pub sot_prev: u32,
+    /// `<|startoflm|>`
     pub sot_lm: u32,
+    /// `<|transcribe|>`
     pub transcribe: u32,
+    /// `<|translate|>`
     pub translate: u32,
+    /// `<|notimestamps|>`
     pub no_timestamps: u32,
+    /// `<|nospeech|>`(古いモデルでは `<|nocaptions|>`)。無音の判定に使う。
     pub no_speech: Option<u32>,
 }
 
 impl WhisperTokenizer {
+    /// tokenizer.json を読み、特殊トークンの ID を引いておく。
     pub fn from_file(path: &Path) -> Result<Self> {
         let inner = tokenizers::Tokenizer::from_file(path)
             .map_err(|error| anyhow!("cannot load {}: {error}", path.display()))?;
@@ -48,6 +58,7 @@ impl WhisperTokenizer {
         self.no_timestamps + 1
     }
 
+    /// トークン文字列の ID。
     pub fn token_to_id(&self, token: &str) -> Option<u32> {
         self.inner.token_to_id(token)
     }
@@ -59,6 +70,7 @@ impl WhisperTokenizer {
             .with_context(|| format!("unknown token id: {id}"))
     }
 
+    /// 文字列をトークン ID の列にする(特殊トークンは足さない)。
     pub fn encode(&self, text: &str) -> Result<Vec<u32>> {
         let encoding = self
             .inner
