@@ -4,7 +4,9 @@
 //! 逐次デコード(`generate_segments` / `generate_with_fallback` /
 //! `_split_segments_by_timestamps`)を移植したもの。推論は faster-whisper と同じ CTranslate2 で行う。
 //!
-//! 移植していないもの: 言語の自動判定、VAD フィルター、単語単位のタイムスタンプ、
+//! `vad_filter=True` と同じく、[`crate::vad`] で無音を取り除いてから文字起こしする(既定)。
+//!
+//! 移植していないもの: 言語の自動判定、単語単位のタイムスタンプ、
 //! hallucination_silence_threshold、initial_prompt / prefix / hotwords。
 
 use std::io::Write as _;
@@ -21,6 +23,7 @@ use crate::config::WhisperSettings;
 use crate::features::{FeatureExtractor, Mel, PreprocessorConfig};
 use crate::model;
 use crate::tokenizer::WhisperTokenizer;
+use crate::vad::{self, SpeechDetector, TimestampMap, VadOptions};
 
 /// エンコーダーに渡すフレーム数(30 秒分)。faster-whisper の `pad_or_trim` の既定値。
 const ENCODER_FRAMES: usize = 3000;
@@ -103,6 +106,8 @@ pub struct Transcriber {
     nb_max_frames: usize,
     /// 特徴量 1 フレームあたりの秒数。
     time_per_frame: f32,
+    /// 無音を取り除く VAD。None なら音声をそのまま文字起こしする。
+    vad: Option<SpeechDetector>,
 }
 
 impl Transcriber {
@@ -124,6 +129,7 @@ impl Transcriber {
         .with_context(|| format!("cannot load the model from {}", model_dir.display()))?;
 
         let options = DecodeOptions::from_settings(settings);
+        let vad = settings.vad_filter.then(SpeechDetector::load).transpose()?;
         let sot_sequence = if whisper.is_multilingual() {
             let language_token = format!("<|{}|>", options.language);
             let language = tokenizer.token_to_id(&language_token).with_context(|| {
@@ -147,12 +153,13 @@ impl Transcriber {
         }
 
         log::info!(
-            "loaded {} from {} in {:.1}s (compute_type={}, cpu_threads={}, chunk_length={chunk_length}s)",
+            "loaded {} from {} in {:.1}s (compute_type={}, cpu_threads={}, chunk_length={chunk_length}s, vad_filter={})",
             settings.model,
             model_dir.display(),
             started.elapsed().as_secs_f32(),
             settings.compute_type,
             settings.cpu_threads,
+            settings.vad_filter,
         );
         Ok(Self {
             suppress_tokens: tokenizer.suppressed_tokens()?,
@@ -163,6 +170,7 @@ impl Transcriber {
             options,
             sot_sequence,
             nb_max_frames,
+            vad,
         })
     }
 
@@ -174,7 +182,35 @@ impl Transcriber {
     }
 
     /// 16kHz モノラルの音声を文字起こしする。
+    ///
+    /// VAD が有効なら、発話のある区間だけをつないで文字起こしし、時刻を元の音声のものに戻す
+    /// (faster-whisper の `vad_filter=True`)。発話が無ければ Whisper に渡さず、何も返さない。
     pub fn transcribe(&self, samples: &[f32]) -> Result<Vec<Segment>> {
+        let Some(detector) = &self.vad else {
+            return self.decode(samples);
+        };
+        let chunks = detector.speech_chunks(samples, &VadOptions::default())?;
+        let speech = vad::collect_chunks(samples, &chunks);
+        log::debug!(
+            "VAD kept {:.1}s of {:.1}s in {} chunk(s)",
+            speech.len() as f32 / audio::SAMPLE_RATE as f32,
+            samples.len() as f32 / audio::SAMPLE_RATE as f32,
+            chunks.len()
+        );
+        if chunks.is_empty() {
+            return Ok(Vec::new());
+        }
+        let map = TimestampMap::new(&chunks);
+        let mut segments = self.decode(&speech)?;
+        for segment in &mut segments {
+            segment.start = map.original_time(segment.start, false);
+            segment.end = map.original_time(segment.end, true);
+        }
+        Ok(segments)
+    }
+
+    /// 音声をそのまま文字起こしする(faster-whisper の `generate_segments`)。
+    fn decode(&self, samples: &[f32]) -> Result<Vec<Segment>> {
         let mel = self.features.compute(samples);
         let content_frames = mel.frames.saturating_sub(1);
 

@@ -11,6 +11,7 @@ mod proceedings;
 mod report;
 mod tokenizer;
 mod transcribe;
+mod vad;
 mod watch;
 
 use std::path::PathBuf;
