@@ -16,7 +16,7 @@
 use std::io::Cursor;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use tract_onnx::prelude::*;
 
 use crate::audio::SAMPLE_RATE;
@@ -119,14 +119,11 @@ impl SpeechDetector {
             }
             let input = Tensor::from_shape(&[count, ROW], &batch)?;
             let outputs = self.model.run(tvec!(input.into(), h, c))?;
-            ensure!(
-                outputs.len() == 3,
-                "the VAD model returned {} outputs",
-                outputs.len()
-            );
-            probs.extend(outputs[0].to_plain_array_view::<f32>()?.iter().copied());
-            h = outputs[1].clone();
-            c = outputs[2].clone();
+            // 出力は発話の確率と、次の窓へ引き継ぐ LSTM の状態 2 つ
+            let [batch_probs, next_h, next_c] = <[TValue; 3]>::try_from(outputs.into_vec())
+                .map_err(|outputs| anyhow!("the VAD model returned {} outputs", outputs.len()))?;
+            probs.extend(batch_probs.to_plain_array_view::<f32>()?.iter().copied());
+            (h, c) = (next_h, next_c);
         }
         ensure!(
             probs.len() == windows,
@@ -324,7 +321,10 @@ impl TimestampMap {
 
     fn chunk_index(&self, time: f32, is_end: bool) -> Option<usize> {
         let last = self.chunk_end_sample.len().checked_sub(1)?;
-        let sample = (f64::from(time) * f64::from(SAMPLE_RATE)) as i64;
+        // Whisper の時刻はサンプルのちょうど倍数なので、最も近いサンプルにする。faster-whisper の
+        // ように切り捨てると、f32 の誤差(1.04 秒が 1.0399999… になるなど)で区間の境目にある
+        // 時刻が前の区間のものになり、取り除いた無音の分だけ早い時刻になってしまう。
+        let sample = (f64::from(time) * f64::from(SAMPLE_RATE)).round() as i64;
         if is_end && let Some(index) = self.chunk_end_sample.iter().position(|&end| end == sample) {
             return Some(index);
         }
@@ -487,6 +487,26 @@ mod tests {
             );
         }
         assert_eq!(TimestampMap::new(&[]).original_time(1.5, false), 1.5);
+    }
+
+    #[test]
+    fn timestamps_on_a_chunk_boundary_belong_to_the_next_chunk() {
+        // つなげた音声では 1.04 秒(16640 サンプル目)が 2 つ目の区間(元の 10 秒)の始まり。
+        let map = TimestampMap::new(&[
+            SpeechChunk {
+                start: 0,
+                end: 16_640,
+            },
+            SpeechChunk {
+                start: 160_000,
+                end: 176_640,
+            },
+        ]);
+        // Whisper の区間の時刻は 0.02 秒刻みの f32 で、52 * 0.02 は 1.04 ちょうどにならない
+        let boundary = 52.0 * 0.02f32;
+        assert_ne!(f64::from(boundary), 1.04);
+        assert_eq!(map.original_time(boundary, false), 10.0);
+        assert_eq!(map.original_time(boundary, true), 1.04);
     }
 
     #[test]
