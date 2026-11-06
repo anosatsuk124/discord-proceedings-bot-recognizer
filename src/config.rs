@@ -32,6 +32,9 @@ pub struct WhisperSettings {
     pub chunk_length: Option<usize>,
     /// 前の区間の文字起こしを、次の区間のプロンプトに使うか。
     pub condition_on_previous_text: bool,
+    /// VAD で無音を取り除いてから文字起こしするか(faster-whisper の `vad_filter`)。
+    /// Whisper が無音から言っていない文字列を書き出すのを防ぐため、既定で有効にする。
+    pub vad_filter: bool,
 }
 
 /// 推論に使うデバイス。
@@ -106,6 +109,10 @@ impl WhisperSettings {
                 .map(|value| parse_bool(&value, "WHISPER_CONDITION_ON_PREVIOUS_TEXT"))
                 .transpose()?
                 .unwrap_or(false),
+            vad_filter: get("WHISPER_VAD_FILTER")
+                .map(|value| parse_bool(&value, "WHISPER_VAD_FILTER"))
+                .transpose()?
+                .unwrap_or(true),
         })
     }
 
@@ -191,6 +198,7 @@ mod tests {
         assert_eq!(s.beam_size, 5);
         assert_eq!(s.chunk_length, Some(15));
         assert!(!s.condition_on_previous_text);
+        assert!(s.vad_filter);
     }
 
     #[test]
@@ -204,6 +212,7 @@ mod tests {
             ("WHISPER_BEAM_SIZE", "1"),
             ("WHISPER_CHUNK_LENGTH", "none"),
             ("WHISPER_CONDITION_ON_PREVIOUS_TEXT", "true"),
+            ("WHISPER_VAD_FILTER", "false"),
         ])
         .unwrap();
         assert_eq!(s.model, "/models/large-v3");
@@ -214,6 +223,7 @@ mod tests {
         assert_eq!(s.beam_size, 1);
         assert_eq!(s.chunk_length, None);
         assert!(s.condition_on_previous_text);
+        assert!(!s.vad_filter);
     }
 
     #[test]
@@ -231,6 +241,7 @@ mod tests {
             ("WHISPER_BEAM_SIZE", "0"),
             ("WHISPER_CHUNK_LENGTH", "0"),
             ("WHISPER_CONDITION_ON_PREVIOUS_TEXT", "maybe"),
+            ("WHISPER_VAD_FILTER", "sometimes"),
         ] {
             assert!(settings(&[(name, value)]).is_err(), "{name}={value}");
         }

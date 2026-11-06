@@ -15,6 +15,12 @@
 温度を上げての再デコード、無音の判定、タイムスタンプでの分割)を移植しているので、同じモデルと設定なら
 faster-whisper とほぼ同じ結果と速さになります。
 
+文字起こしの前に、faster-whisper の `vad_filter=True` と同じく、[Silero VAD](https://github.com/snakers4/silero-vad) で
+無音を取り除きます。Whisper は無音を渡されると、「ごめん」などの言っていない文字列を書き出すことがあるためです。
+発話のある区間だけをつないで文字起こしし、時刻は元の音声の時刻に戻します。発話が無い音声は文字起こししません。
+VAD のモデルは faster-whisper が同梱しているものをバイナリに埋め込み、純 Rust の [tract](https://github.com/sonos/tract)
+で動かします(入手元とライセンスは [assets/README.md](assets/README.md))。
+
 既定のモデルは [kotoba-tech/kotoba-whisper-v2.0-faster](https://huggingface.co/kotoba-tech/kotoba-whisper-v2.0-faster) を CPU (int8) で使います。
 
 ## 使い方
@@ -53,10 +59,11 @@ watch は `proceedings.csv` の有無で処理済みかを判断します。bot 
 | `WHISPER_BEAM_SIZE` | `5` | ビームサーチの幅 |
 | `WHISPER_CHUNK_LENGTH` | `15` | 1 回にデコードする長さ(秒)。`none` ならモデルの設定(30 秒)。15 は kotoba-whisper の推奨 |
 | `WHISPER_CONDITION_ON_PREVIOUS_TEXT` | `false` | 前の区間の文字起こしをプロンプトに使うか。kotoba-whisper の推奨は `false` |
+| `WHISPER_VAD_FILTER` | `true` | VAD で無音を取り除いてから文字起こしするか |
 | `PROCEEDINGS_TIMEZONE` | `UTC` | 議事録に書く時刻のタイムゾーン(例: `Asia/Tokyo`) |
 | `HF_HOME` | `~/.cache/huggingface` | モデルのキャッシュの場所 |
 | `HF_TOKEN` | | 非公開のモデルを使うときのトークン |
-| `RUST_LOG` | `info` | ログの詳しさ(`debug` にするとデコードの様子も出る) |
+| `RUST_LOG` | `info` | ログの詳しさ(`debug` にすると、VAD が残した長さやデコードの様子も出る) |
 
 モデルは初回だけ Hugging Face から取ってきます。必要なファイルがキャッシュにそろっていれば、ネットワークには出ません。
 

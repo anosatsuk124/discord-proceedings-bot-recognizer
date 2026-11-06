@@ -17,6 +17,8 @@ RUN mkdir src && echo 'fn main() {}' > src/main.rs \
         target/release/discord-proceedings-bot-recognizer*
 
 COPY src ./src
+# VAD のモデル(バイナリに埋め込む)
+COPY assets ./assets
 RUN nice -n 19 cargo build --release --locked \
     && strip target/release/discord-proceedings-bot-recognizer \
     # 実行用イメージに無い OpenMP のランタイム(CTranslate2 と oneDNN が使う)と、
